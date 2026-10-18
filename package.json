@@ -1,0 +1,26 @@
+{
+  "name": "clario",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "apps/teacher",
+    "apps/student",
+    "server"
+  ],
+  "scripts": {
+    "dev:teacher": "npm run build --workspace @clario/shared && npm run dev --workspace @clario/teacher",
+    "dev:student": "npm run build --workspace @clario/shared && npm run dev --workspace @clario/student",
+    "dev:server": "npm run build --workspace @clario/shared && npm run dev --workspace @clario/server",
+    "build": "npm run build --workspace @clario/shared && npm run build --workspace @clario/teacher && npm run build --workspace @clario/student && npm run build --workspace @clario/server",
+    "typecheck": "npm run build --workspace @clario/shared && npm run typecheck --workspace @clario/shared && npm run typecheck --workspace @clario/teacher && npm run typecheck --workspace @clario/student && npm run typecheck --workspace @clario/server",
+    "test": "npm run test --workspace @clario/shared && npm run test --workspace @clario/server",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}
