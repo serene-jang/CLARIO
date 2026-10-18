@@ -1,0 +1,172 @@
+name: CLARIO Azure CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clario-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: node --test scripts/verify-deployment.test.mjs
+      - run: npm run build
+      - name: Package Linux API runtime
+        run: |
+          npm prune --omit=dev --ignore-scripts
+          mkdir -p runtime/server runtime/packages/shared runtime/apps/teacher runtime/apps/student
+          cp package.json package-lock.json runtime/
+          cp server/package.json runtime/server/
+          cp packages/shared/package.json runtime/packages/shared/
+          cp apps/teacher/package.json runtime/apps/teacher/
+          cp apps/student/package.json runtime/apps/student/
+          cp -r server/dist runtime/server/
+          cp -r packages/shared/dist runtime/packages/shared/
+          cp -r node_modules runtime/
+          cd runtime
+          node --input-type=module -e "await import('@clario/shared'); await import('./server/dist/app.js')"
+          zip -qr ../api.zip .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: api
+          path: api.zip
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: teacher
+          path: apps/teacher/dist/
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: student
+          path: apps/student/dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    name: Deploy free Azure trial
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+      - name: Azure OIDC login
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify free plans before deployment
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_TEACHER_APP: ${{ vars.AZURE_TEACHER_APP }}
+          AZURE_STUDENT_APP: ${{ vars.AZURE_STUDENT_APP }}
+        run: |
+          plan=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" --query serverFarmId -o tsv)
+          test "$(az appservice plan show --ids "$plan" --query sku.name -o tsv)" = "F1"
+          for app in "$AZURE_TEACHER_APP" "$AZURE_STUDENT_APP"; do
+            test "$(az staticwebapp show -g "$AZURE_RESOURCE_GROUP" -n "$app" --query sku.name -o tsv)" = "Free"
+          done
+      - name: Deploy API using Entra authentication
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+        run: |
+          az webapp deploy -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" \
+            --src-path artifacts/api/api.zip --type zip --timeout 600000 --only-show-errors
+      - name: Verify API and publishing lockdown
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+        run: |
+          host=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" --query defaultHostName -o tsv)
+          node scripts/verify-deployment.mjs api "https://$host"
+          appId=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" --query id -o tsv)
+          test "$(az rest --method get --url "$appId/basicPublishingCredentialsPolicies/scm?api-version=2023-12-01" --query properties.allow -o tsv)" = "false"
+      - name: Obtain masked Static Web Apps deployment tokens
+        id: swa
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_TEACHER_APP: ${{ vars.AZURE_TEACHER_APP }}
+          AZURE_STUDENT_APP: ${{ vars.AZURE_STUDENT_APP }}
+        run: |
+          teacher=$(az staticwebapp secrets list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_TEACHER_APP" --query properties.apiKey -o tsv)
+          student=$(az staticwebapp secrets list -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_STUDENT_APP" --query properties.apiKey -o tsv)
+          test -n "$teacher" && test -n "$student"
+          echo "::add-mask::$teacher"
+          echo "::add-mask::$student"
+          echo "teacher=$teacher" >> "$GITHUB_OUTPUT"
+          echo "student=$student" >> "$GITHUB_OUTPUT"
+      - name: Deploy teacher
+        uses: Azure/static-web-apps-deploy@4d27395796ac319302594769cfe812bd207490b1 # v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa.outputs.teacher }}
+          action: upload
+          app_location: artifacts/teacher
+          api_location: ''
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
+          production_branch: main
+      - name: Verify teacher
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_TEACHER_APP: ${{ vars.AZURE_TEACHER_APP }}
+        run: |
+          host=$(az staticwebapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_TEACHER_APP" --query defaultHostname -o tsv)
+          node scripts/verify-deployment.mjs static "https://$host" artifacts/teacher
+      - name: Deploy student
+        uses: Azure/static-web-apps-deploy@4d27395796ac319302594769cfe812bd207490b1 # v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa.outputs.student }}
+          action: upload
+          app_location: artifacts/student
+          api_location: ''
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
+          production_branch: main
+      - name: Verify student
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_STUDENT_APP: ${{ vars.AZURE_STUDENT_APP }}
+        run: |
+          host=$(az staticwebapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_STUDENT_APP" --query defaultHostname -o tsv)
+          node scripts/verify-deployment.mjs static "https://$host" artifacts/student

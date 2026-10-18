@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "clario-dev-42e4"
+    },
+    "location": {
+      "value": "koreacentral"
+    },
+    "sessionId": {
+      "value": "42e46e95-43e1-4df2-bb17-871a26078ae8"
+    },
+    "deployedBy": {
+      "value": "장서린"
+    },
+    "createdAt": {
+      "value": "2026-10-18T10:01:49.1346506+09:00"
+    },
+    "deployerObjectId": {
+      "value": ""
+    }
+  }
+}

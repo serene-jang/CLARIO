@@ -9,6 +9,7 @@
     "server"
   ],
   "scripts": {
+    "start": "npm run start --workspace @clario/server",
     "dev:teacher": "npm run build --workspace @clario/shared && npm run dev --workspace @clario/teacher",
     "dev:student": "npm run build --workspace @clario/shared && npm run dev --workspace @clario/student",
     "dev:server": "npm run build --workspace @clario/shared && npm run dev --workspace @clario/server",
