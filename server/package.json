@@ -4,20 +4,28 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "setup": "tsx scripts/setup.mjs",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "db:local": "node scripts/local-database.mjs",
+    "db:migrate": "tsx src/manage.ts migrate",
+    "school:create": "tsx src/manage.ts school"
   },
   "dependencies": {
     "@clario/shared": "0.1.0",
     "dotenv": "^16.6.1",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "google-auth-library": "^11.3.1",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/node": "^24.5.2",
+    "@types/pg": "^8.15.0",
+    "embedded-postgres": "18.4.0-beta.17",
     "@types/supertest": "^6.0.3",
     "supertest": "^7.1.4",
     "tsx": "^4.20.5"

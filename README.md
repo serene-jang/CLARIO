@@ -1,8 +1,10 @@
 # CLARIO
 
-CLARIO는 교실 기기 관리 서비스 개발 프로젝트입니다. 현재 저장소에는 Teacher 웹 앱, Student 클라이언트, Backend API의 **개발 기반만** 구성되어 있습니다. 로그인, 학교/학급 데이터 연동, 기기 상태 수집, 화면 확인 및 녹화 기능은 아직 구현되지 않았습니다.
+CLARIO는 교실 기기 관리 서비스 개발 프로젝트입니다. Google 개인 계정과 Workspace 계정으로 가입해 작업공간을 만들 수 있는 공개 가입 코드가 로컬에 구현되었습니다. 가입자는 해당 작업공간의 초기 관리자이며 이메일 도메인만으로 학교 소속을 검증하지 않습니다. 실제 Google OAuth client 설정·브라우저 로그인과 Chrome/Chromebook 실기기 검증은 아직 필요합니다. 기기 명부 등록 자체는 기기 인증·자동 연결이 아니며, 페어링도 하드웨어 attestation이 아닙니다. 강제 사이트/앱 차단·화면 확인·녹화는 구현되지 않았습니다.
 
 제품 요구사항은 [PRD.md](./PRD.md), 시스템 구성은 [ARCHITECTURE.md](./ARCHITECTURE.md), 에이전트 지침은 [AGENT.md](./AGENT.md), 작업 상태는 [TASKS.md](./TASKS.md)를 참고하세요. Phase 0 기술 조사 결과는 [docs/phase-0-findings.md](./docs/phase-0-findings.md)에 있습니다.
+
+학교 관리형 Chromebook의 **학생 웹 방문 없는 자동 연결**에 관한 조사와 조건은 [Chromebook Phase 0 문서](./docs/chromebook-phase-0.md)에 있습니다. 후속으로 일회성 코드 페어링·30초 상태 전송·학급 링크 전달 코드를 추가했습니다. [Device Client 설정과 제한](./docs/device-client.md)을 참고하세요. 기기 관리·학교 확장 배포 권한·실기기 연결·화면 캡처는 미검증입니다.
 
 ## 요구 환경
 
@@ -10,6 +12,18 @@ CLARIO는 교실 기기 관리 서비스 개발 프로젝트입니다. 현재 �
 - npm 11 이상
 
 ## 설치 및 실행
+
+### 입력 화면으로 최초 로컬 설정 (권장)
+
+```powershell
+npm run setup
+```
+
+터미널에 표시된 **`#` 이후를 포함한 전체 로컬 주소**를 브라우저에서 엽니다. Google OAuth 클라이언트 ID, 작업공간 이름·관리자 이메일·이름을 입력하면 로컬 PostgreSQL 시작, DB 마이그레이션, 작업공간·관리자 등록, `server/.env` 저장을 진행합니다. DB 비밀번호나 Google Client secret을 입력하지 않습니다.
+
+설정 터미널은 DB 실행을 위해 유지하고, 화면에 안내된 `dev:server`, `dev:teacher`, `dev:student` 명령을 각각 별도 터미널에서 실행합니다. 이미 실행 중인 API는 해당 터미널에서 재시작해야 새 설정이 적용됩니다. 이후 다시 개발할 때는 `db:local`로 DB를 시작할 수 있습니다.
+
+이 화면은 `127.0.0.1:5180`에서만 실행하는 **로컬 전용 도구**입니다. 공개 API에 설정 경로를 추가하지 않으며 Azure 배포 설정도 바꾸지 않습니다. 터미널 주소는 설정 권한을 포함하므로 공유하지 마세요. 기존 외부 DB/비표준 포트·허용 주소는 덮어쓰지 않습니다. Google Cloud의 OAuth 클라이언트 설정은 직접 필요합니다. 학교 계정 관리 권한은 개인 작업공간 생성에 필요하지 않지만, 학교가 관리하는 Google 계정의 로그인 정책은 적용됩니다.
 
 프로젝트 루트에서 의존성을 설치합니다.
 
@@ -31,7 +45,11 @@ npm run dev:server
 - Student: http://127.0.0.1:5174
 - API health check: http://127.0.0.1:4000/health
 
-서버는 프로젝트 루트의 `.env.example`을 `server/.env`로 복사해 로컬 설정을 지정할 수 있습니다. npm workspace로 실행하면 서버 폴더를 기준으로 설정을 읽습니다. 로컬 API의 `PORT` 기본값은 `4000`입니다. `NODE_ENV=production`이면 배포 환경의 외부 요청을 받도록 `0.0.0.0`에 바인딩하고, 그 외에는 기존처럼 `127.0.0.1`에 바인딩합니다. 실제 비밀 값이나 OAuth 자격 증명은 아직 필요하지 않으며 `.env`는 Git에서 제외됩니다.
+서버는 프로젝트 루트의 `.env.example`을 `server/.env`로 복사해 로컬 설정을 지정할 수 있습니다. npm workspace로 실행하면 서버 폴더를 기준으로 설정을 읽습니다. 로컬 API의 `PORT` 기본값은 `4000`입니다. `NODE_ENV=production`이면 `0.0.0.0`, 그 외에는 `127.0.0.1`에 바인딩합니다. `.env`는 Git에서 제외됩니다. 로그인에는 `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `APP_ORIGINS`를 모두 설정하고 마이그레이션·학교 관리자 등록을 수행해야 합니다. 아무 인증 설정도 없으면 `/health`는 유지하고 `/api`는 설정 미완료(503)를 반환합니다.
+
+**로그인 개발 시작:** [Phase 2 설정 안내](./docs/phase-2-authentication.md)에서 OAuth 클라이언트 준비 → 로컬 설정 화면 → 교사 앱에서 개인 작업공간 가입 순서로 진행하세요.
+
+**학생 기기 등록:** 로그인 후 담당 작업공간 학급의 **학급 관리 → 학생 기기 등록**에서 학생·기기 이름·자산번호를 입력합니다. 기존 DB도 `npm run db:migrate --workspace @clario/server`로 버전 5까지 적용해야 합니다. 자세한 동작과 삭제 규칙은 [기기 명부 사용 안내](./docs/phase-2-authentication.md#학생-기기-명부-등록-추가-기능)를, 코드 발급·연결·자료 전달은 [Device Client 안내](./docs/device-client.md)를 참고하세요. 공개 가입 변경도 아직 배포하지 않았으므로 공개 사이트에는 반영되지 않았습니다.
 
 빌드 후 저장소 루트에서 `npm start`로 API를 실행할 수 있습니다. Azure 배포 분석과 진행 상태는 [docs/azure-deployment.md](./docs/azure-deployment.md)를 참고하세요.
 
@@ -61,4 +79,4 @@ npm run format:check
 - `server`: Express + TypeScript API 개발 서버
 - `packages/shared`: 사용자 역할, 기기 상태, 기능 지원 상태, 녹화 상태와 기본 도메인 타입
 
-공유 도메인 모델은 현재 타입 기반의 시작점입니다. PostgreSQL 연결, DB 스키마/마이그레이션 및 데이터 저장은 이후 Phase에서 요구사항을 구체화한 뒤 구현합니다.
+공통 도메인 타입과 로그인 사용자 타입을 공유합니다. Phase 2 PostgreSQL 스키마·마이그레이션과 권한 검사 코드는 `server/src/`에, 교사·학생 공통 로그인/학급 UI는 `apps/common/`에 있습니다. [Phase 2 구현·검증 범위](./docs/phase-2-authentication.md)를 참고하세요.

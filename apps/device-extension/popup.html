@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CLARIO 기기 연결</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>CLARIO</h1>
+    <p>학교 승인 기기 연결 · 화면·음성·방문 기록을 수집하지 않습니다.</p>
+    <p id="status" role="status">연결 상태 확인 중</p>
+    <p id="error" role="alert"></p>
+    <section aria-labelledby="focus-title">
+      <h2 id="focus-title">자율 집중 안내</h2>
+      <p id="focus">상태 확인 전</p>
+      <p>다른 사이트·앱을 차단하지 않습니다. 수업 자료를 선택해 학습해 주세요.</p>
+    </section>
+    <form id="pair">
+      <label
+        >학교에서 안내한 API 원본 주소<input
+          name="origin"
+          type="url"
+          required
+          placeholder="https://api.school.example"
+      /></label>
+      <label
+        >교사가 발급한 최초 연결 코드<input
+          name="code"
+          required
+          minlength="32"
+          maxlength="32"
+          autocomplete="off"
+          spellcheck="false"
+      /></label>
+      <p>다른 사람의 연결 코드를 사용하지 마세요. 승인한 학교 주소만 입력하세요.</p>
+      <button>이 기기 연결</button>
+    </form>
+    <button id="sync" type="button">연결·자료 다시 확인</button>
+    <button id="disconnect" type="button">이 기기 연결 해제</button>
+    <h2>수업 자료</h2>
+    <p>새 자료는 확장 프로그램 배지로 알립니다. 선택해야 페이지가 열립니다.</p>
+    <ul id="materials"></ul>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
