@@ -1,6 +1,14 @@
 export const userRoles = ['teacher', 'student', 'school_admin'] as const;
 export type UserRole = (typeof userRoles)[number];
 
+export interface CurrentUser {
+  id: string;
+  schoolId: string;
+  email: string;
+  name: string;
+  role: UserRole;
+}
+
 export const deviceConnectionStates = ['connected', 'disconnected', 'unknown'] as const;
 export type DeviceConnectionState = (typeof deviceConnectionStates)[number];
 
@@ -51,6 +59,27 @@ export interface StudentDevice {
   screenViewingSupport: FeatureSupportState;
   recordingSupport: FeatureSupportState;
   lastConnectedAt?: string;
+}
+
+export interface RegisteredDevice {
+  id: string;
+  studentId: string;
+  studentName: string;
+  name: string;
+  assetNumber: string;
+  connectionState: DeviceConnectionState;
+  lastSeenAt: string | null;
+  screenViewingSupport: 'unverified';
+  recordingSupport: 'unverified';
+}
+
+export interface ClassMaterial {
+  id: string;
+  title: string;
+  url: string;
+  createdAt: string;
+  expiresAt: string;
+  deliveries: { deviceId: string; receivedAt: string | null; openedAt: string | null }[];
 }
 
 export interface Recording {

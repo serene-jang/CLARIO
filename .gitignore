@@ -10,3 +10,5 @@ coverage/
 !.env.example
 .DS_Store
 Thumbs.db
+.local-postgres/
+.env.setup-*.tmp

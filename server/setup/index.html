@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CLARIO | 로컬 초기 설정</title>
+    <link rel="stylesheet" href="/setup.css" />
+    <script src="/setup.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header><span class="brand">CLARIO</span><span class="tag">내 PC 전용</span></header>
+      <h1>작업공간 설정을 시작하세요</h1>
+      <p>
+        아래 정보를 입력하면 로컬 개발 DB 준비, 작업공간·관리자 등록, 서버 설정 저장을 진행합니다.
+        공개 Azure 사이트에는 적용되지 않습니다.
+      </p>
+      <aside>
+        <strong>먼저 Google Cloud에서 설정하세요</strong>
+        <p>
+          웹 애플리케이션 OAuth 클라이언트의 승인된 JavaScript 원본에 아래 주소를 모두 추가하세요.
+        </p>
+        <code>http://127.0.0.1:5173</code>
+        <code>http://127.0.0.1:5174</code>
+        <p>
+          Google 계정 종류와 관계없이 사용할 수 있습니다. Client secret·DB 비밀번호는 입력하지
+          않습니다.
+        </p>
+      </aside>
+      <form id="setup">
+        <label for="googleClientId">Google OAuth 클라이언트 ID</label>
+        <input
+          id="googleClientId"
+          name="googleClientId"
+          required
+          maxlength="300"
+          placeholder="123456789-abc.apps.googleusercontent.com"
+          autocomplete="off"
+        />
+        <label for="schoolName">작업공간 이름</label>
+        <input
+          id="schoolName"
+          name="schoolName"
+          required
+          maxlength="100"
+          placeholder="예: 우리 교실"
+        />
+        <label for="domain">관리자 이메일 도메인 (기록용)</label>
+        <input
+          id="domain"
+          name="domain"
+          required
+          maxlength="253"
+          placeholder="example.com"
+          autocapitalize="none"
+          spellcheck="false"
+        />
+        <small
+          >관리자 이메일의 @ 뒤 부분입니다. 학교 소속을 확인하는 용도로 사용하지 않습니다.</small
+        >
+        <label for="email">최초 관리자 Google 이메일</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          required
+          maxlength="254"
+          placeholder="admin@example.com"
+          autocomplete="email"
+        />
+        <label for="adminName">관리자 이름</label>
+        <input id="adminName" name="adminName" required maxlength="100" autocomplete="name" />
+        <p>
+          <label class="check"
+            ><input type="checkbox" required />로컬 개발 작업공간의 초기 관리자 계정을 등록할 권한이
+            있습니다.</label
+          >
+        </p>
+        <button type="submit">설정 저장 및 작업공간 등록</button>
+      </form>
+      <p id="status" role="status" aria-live="polite"></p>
+      <section id="result" hidden>
+        <h2>로컬 설정이 적용되었습니다</h2>
+        <p>
+          DB 마이그레이션과 관리자 등록, 서버 환경설정 저장이 완료되었습니다. Google 계정의 실제
+          로그인 성공은 아직 확인하지 않았습니다.
+        </p>
+        <p>
+          <strong>이 설정 터미널은 DB 실행을 위해 계속 열어 두세요.</strong> API가 이미 실행 중이면
+          해당 터미널에서 종료 후 다시 실행하세요.
+        </p>
+        <p>프로젝트 루트의 별도 터미널 세 개에서 각각 실행하세요.</p>
+        <code>npm run dev:server</code>
+        <code>npm run dev:teacher</code>
+        <code>npm run dev:student</code>
+        <p>
+          <a href="http://127.0.0.1:5173" target="_blank" rel="noreferrer">교사 화면 열기</a> ·
+          <a href="http://127.0.0.1:5174" target="_blank" rel="noreferrer">학생 화면 열기</a>
+        </p>
+        <p>
+          최초 관리자는 관리자 화면에서 교사·학생 계정을 승인합니다. 학급 생성은 승인된 교사
+          계정으로 진행하세요.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>

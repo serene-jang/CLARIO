@@ -4,3 +4,4 @@ coverage
 .copilot-azure
 package-lock.json
 *.md
+.local-postgres/
