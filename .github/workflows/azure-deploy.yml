@@ -99,7 +99,8 @@ jobs:
           AZURE_TEACHER_APP: ${{ vars.AZURE_TEACHER_APP }}
           AZURE_STUDENT_APP: ${{ vars.AZURE_STUDENT_APP }}
         run: |
-          plan=$(az webapp show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" --query serverFarmId -o tsv)
+          plan=$(az resource show -g "$AZURE_RESOURCE_GROUP" -n "$AZURE_API_APP" --resource-type Microsoft.Web/sites --api-version 2023-12-01 --query properties.serverFarmId -o tsv)
+          test -n "$plan"
           test "$(az appservice plan show --ids "$plan" --query sku.name -o tsv)" = "F1"
           for app in "$AZURE_TEACHER_APP" "$AZURE_STUDENT_APP"; do
             test "$(az staticwebapp show -g "$AZURE_RESOURCE_GROUP" -n "$app" --query sku.name -o tsv)" = "Free"
