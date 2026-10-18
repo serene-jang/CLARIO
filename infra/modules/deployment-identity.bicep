@@ -13,7 +13,7 @@ resource githubFederatedCredential 'Microsoft.ManagedIdentity/userAssignedIdenti
   name: 'github-main'
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:serene-jang/CLARIO:ref:refs/heads/main'
+    subject: 'repo:serene-jang@277176776/CLARIO@1423864194:ref:refs/heads/main'
     audiences: [
       'api://AzureADTokenExchange'
     ]

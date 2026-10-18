@@ -189,7 +189,7 @@ GitHub **Settings → Secrets and variables → Actions → Variables**:
 
 이 값은 비밀 인증키가 아니다. client secret, 게시 프로필 또는 구독 전체 권한을 저장하지 않는다.
 
-관리 ID `id-clario-dev-42e4`는 새 CLARIO 리소스 그룹에만 Contributor 역할을 가진다. OIDC issuer는 `https://token.actions.githubusercontent.com`, subject는 `repo:serene-jang/CLARIO:ref:refs/heads/main`, audience는 `api://AzureADTokenExchange`다. 워크플로에 GitHub environment를 추가하거나 저장소 이름을 바꾸면 subject도 함께 변경해야 한다.
+관리 ID `id-clario-dev-42e4`는 새 CLARIO 리소스 그룹에만 Contributor 역할을 가진다. OIDC issuer는 `https://token.actions.githubusercontent.com`, 실제 실행에서 확인한 subject는 `repo:serene-jang@277176776/CLARIO@1423864194:ref:refs/heads/main`, audience는 `api://AzureADTokenExchange`다. GitHub가 이 저장소에 발급하는 형식은 소유자·저장소 ID를 포함한다. 이름만 사용한 기존 예시 subject로는 로그인에 실패했다. 워크플로에 GitHub environment를 추가하거나 저장소 이름을 바꾸면 실제 토큰 subject에 맞춰 신뢰 설정도 함께 변경해야 한다.
 
 App Service는 OIDC 로그인으로 배포하며 SCM/FTP 기본 인증은 꺼져 있다. Static Web Apps 배포 action에는 서비스 전용 토큰이 필요하므로 OIDC 로그인 후 Azure에서 실행 중 조회한다. 토큰은 즉시 마스킹하고 같은 job에만 전달하며 GitHub secret이나 저장소에 장기 복사하지 않는다. 배포 ID의 그룹 권한으로 토큰을 조회할 수 있으므로 main 및 워크플로 수정 권한을 신뢰하는 관리자에게만 부여한다.
 
@@ -207,7 +207,11 @@ App Service는 OIDC 로그인으로 배포하며 SCM/FTP 기본 인증은 꺼져
 - Azure 인프라 생성: 성공.
 - F1/Free 리소스 및 그룹 한정 배포 역할: 조회 확인.
 - 로컬 기존 테스트 4개 및 추가 검증기 테스트 2개: 통과.
-- 실제 GitHub Actions 및 배포 URL 검증: 첫 push 후 기록 예정. 아직 성공으로 단정하지 않는다.
+- [GitHub Actions 실행 39086161420](https://github.com/serene-jang/CLARIO/actions/runs/39086161420): 검사·빌드·배포 작업 모두 성공. 첫 시도는 OIDC subject 불일치로 실패했으며 실제 토큰 형식에 맞춘 후 재실행해 성공했다.
+- 외부 HTTPS 검사: API `/health`의 정확한 JSON 응답과 두 웹의 빌드 산출물(JS/CSS 바이트 일치)을 확인했다.
+- 브라우저 검사: 교사·학생 웹의 실제 React 화면과 미구현 기능 안내를 확인했다.
+- 배포 후 F1 요금제와 SCM/FTP 기본 인증 비활성화 상태를 다시 확인했다.
+- Log Analytics를 만들지 않았으므로 공통 로그 조회 도구로 중앙 로그를 가져올 수 없었다. 중앙 모니터링을 구성했다고 주장하지 않는다. Actions 단계 로그와 실제 HTTP·브라우저 결과로 이번 배포를 검증했다.
 
 ## 공식 참고 자료
 
