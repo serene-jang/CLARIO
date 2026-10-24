@@ -40,6 +40,71 @@
   font: inherit;
 }
 
+.school-workspace,
+.school-workspace section,
+.school-workspace form > *,
+.workspace-list li > * {
+  min-width: 0;
+}
+
+.school-workspace {
+  overflow-wrap: anywhere;
+}
+
+.recipient-list {
+  width: 100%;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.recipient-list label {
+  display: flex;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.teacher-notifications,
+.future-capabilities {
+  margin: 20px 0;
+  padding: 16px;
+  border: 1px solid #dbe2f1;
+  border-radius: 12px;
+}
+
+.test-badge {
+  color: #7b4100;
+  background: #fff1d6;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.actual-badge {
+  color: #205a3e;
+  background: #e7f2ed;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+@media (max-width: 600px) {
+  .school-workspace form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .school-workspace form > label,
+  .school-workspace form > button {
+    width: 100%;
+  }
+  .workspace-list li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .school-workspace fieldset {
+    min-inline-size: 0;
+    max-width: 100%;
+    margin-inline: 0;
+  }
+}
+
 .school-workspace button {
   background: #eef1ff;
   color: #263a94;
@@ -72,6 +137,11 @@
 
 .workspace-list li span {
   flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.material-panel .workspace-list li > * {
+  max-width: 100%;
   overflow-wrap: anywhere;
 }
 

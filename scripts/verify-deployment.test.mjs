@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { verifyApi, verifyStatic } from './verify-deployment.mjs';
+import { verifyApi, verifyReady, verifyStatic } from './verify-deployment.mjs';
 
 test('API verification rejects successful HTTP responses with wrong bodies', async () => {
   await verifyApi('https://example.test', async () => Response.json({ status: 'ok' }));
@@ -13,6 +13,36 @@ test('API verification rejects successful HTTP responses with wrong bodies', asy
   await assert.rejects(() =>
     verifyApi('https://example.test', async () => Response.json({ status: 'ok' }, { status: 503 })),
   );
+});
+
+test('readiness rejects live but unconfigured processes and wrong bodies', async () => {
+  await verifyReady('https://example.test', async () => Response.json({ status: 'ready' }));
+  await assert.rejects(() =>
+    verifyReady('https://example.test', async () => Response.json({ status: 'ok' })),
+  );
+  await assert.rejects(() =>
+    verifyReady('https://example.test', async () =>
+      Response.json({ status: 'not_ready' }, { status: 503 }),
+    ),
+  );
+});
+
+test('relative compiled assets are verified at the actual prefixed app path', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'clario-prefix-'));
+  try {
+    const html = '<title>Student</title><script src="./assets/current.js"></script>';
+    await mkdir(path.join(directory, 'assets'));
+    await writeFile(path.join(directory, 'index.html'), html);
+    await writeFile(path.join(directory, 'assets', 'current.js'), 'current');
+    const paths = [];
+    await verifyStatic('https://example.test/student', directory, async (url) => {
+      paths.push(url.pathname);
+      return new Response(url.pathname === '/student/' ? html : 'current');
+    });
+    assert.deepEqual(paths, ['/student/', '/student/assets/current.js']);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('static verification rejects stale HTML and incorrect or missing assets', async () => {

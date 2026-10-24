@@ -12,9 +12,20 @@ export async function verifyApi(url, request = fetch) {
   assert.deepEqual(await response.json(), { status: 'ok' });
 }
 
+export async function verifyReady(url, request = fetch) {
+  const response = await request(new URL('/ready', url), {
+    signal: AbortSignal.timeout(10_000),
+    cache: 'no-store',
+  });
+  assert.equal(response.status, 200, 'Configured API readiness must return HTTP 200');
+  assert.deepEqual(await response.json(), { status: 'ready' });
+}
+
 export async function verifyStatic(url, directory, request = fetch) {
   const expected = await readFile(path.join(directory, 'index.html'), 'utf8');
-  const response = await request(new URL('/', url), {
+  const base = new URL(url);
+  if (!base.pathname.endsWith('/')) base.pathname += '/';
+  const response = await request(base, {
     signal: AbortSignal.timeout(30_000),
     cache: 'no-store',
   });
@@ -23,19 +34,19 @@ export async function verifyStatic(url, directory, request = fetch) {
   const title = expected.match(/<title>[^<]+<\/title>/)?.[0];
   assert.ok(title, 'Built HTML must contain a title');
   assert.ok(actual.includes(title), 'Deployed title must match the built app');
-  const assets = [...expected.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map(
+  const assets = [...expected.matchAll(/(?:src|href)="((?:\.?\/)assets\/[^"]+)"/g)].map(
     (match) => match[1],
   );
   assert.ok(assets.length > 0, 'Built HTML must reference compiled assets');
   for (const asset of assets) {
     assert.ok(actual.includes(asset), `Deployed page is stale: missing ${asset}`);
-    const deployedAsset = await request(new URL(asset, url), {
+    const deployedAsset = await request(new URL(asset, base), {
       signal: AbortSignal.timeout(30_000),
     });
     assert.equal(deployedAsset.status, 200, `Missing deployed asset: ${asset}`);
     assert.deepEqual(
       Buffer.from(await deployedAsset.arrayBuffer()),
-      await readFile(path.join(directory, asset.slice(1))),
+      await readFile(path.join(directory, asset.replace(/^\.?\//, ''))),
       `Deployed asset differs from the tested build: ${asset}`,
     );
   }
@@ -43,13 +54,14 @@ export async function verifyStatic(url, directory, request = fetch) {
 
 async function main() {
   const [mode, url, directory] = process.argv.slice(2);
-  assert.ok(mode === 'api' || mode === 'static', 'Expected api or static mode');
+  assert.ok(['api', 'ready', 'static'].includes(mode), 'Expected api, ready or static mode');
   assert.ok(url, 'Deployment URL is required');
   assert.equal(new URL(url).protocol, 'https:', 'Deployment must use HTTPS');
   if (mode === 'static') assert.ok(directory, 'Built static directory required');
   for (let attempt = 1; attempt <= 6; attempt++) {
     try {
       if (mode === 'api') await verifyApi(url);
+      else if (mode === 'ready') await verifyReady(url);
       else await verifyStatic(url, directory);
       console.log(`Verified ${mode} deployment: ${url}`);
       return;

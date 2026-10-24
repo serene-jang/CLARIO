@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import type { CurrentUser, UserRole } from '@clario/shared';
 import './school.css';
 import DeviceRegistry from './DeviceRegistry.js';
+import { loadGoogle } from './google-login.js';
+import { RequestError, errorMessage, requestJson } from './web-api.js';
 
 interface Classroom {
   id: string;
@@ -22,69 +24,6 @@ interface Login {
   user: CurrentUser;
   expiresAt: string;
 }
-interface GoogleApi {
-  accounts: {
-    id: {
-      initialize(options: {
-        client_id: string;
-        nonce: string;
-        auto_select: boolean;
-        callback: (result: { credential: string }) => void;
-      }): void;
-      renderButton(element: HTMLElement, options: { type: string; text: string }): void;
-      disableAutoSelect(): void;
-      cancel(): void;
-    };
-  };
-}
-declare global {
-  interface Window {
-    google?: GoogleApi;
-  }
-}
-
-let googleScript: Promise<GoogleApi> | undefined;
-function loadGoogle() {
-  if (window.google) return Promise.resolve(window.google);
-  if (!googleScript) {
-    googleScript = new Promise<GoogleApi>((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      const timeout = window.setTimeout(() => {
-        script.remove();
-        reject(new Error('Google 로그인 연결 시간이 초과되었습니다.'));
-      }, 15000);
-      script.onload = () => {
-        window.clearTimeout(timeout);
-        if (window.google) resolve(window.google);
-        else reject(new Error('Google 로그인 도구를 불러오지 못했습니다.'));
-      };
-      script.onerror = () => {
-        window.clearTimeout(timeout);
-        script.remove();
-        reject(new Error('Google 로그인 연결에 실패했습니다. 네트워크를 확인해 주세요.'));
-      };
-      document.head.append(script);
-    }).catch((cause: unknown) => {
-      googleScript = undefined;
-      throw cause;
-    });
-  }
-  return googleScript;
-}
-
-class RequestError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-  ) {
-    super(message);
-  }
-}
-const errorMessage = (error: unknown) =>
-  error instanceof Error ? error.message : '요청 처리에 실패했습니다.';
-
 export default function SchoolWorkspace({
   audience,
   apiBase,
@@ -122,38 +61,15 @@ export default function SchoolWorkspace({
 
   const api = useCallback(
     async <T,>(path: string, token?: string, method = 'GET', body?: object): Promise<T> => {
-      if (apiBase) {
-        const url = new URL(apiBase);
+      try {
+        return await requestJson<T>(apiBase, path, token, method, body);
+      } catch (error) {
         if (
-          url.origin !== apiBase ||
-          (url.protocol !== 'https:' &&
-            !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname)))
-        )
-          throw new Error('API 주소 설정이 올바르지 않습니다.');
-      }
-      const response = await fetch(`${apiBase}/api${path}`, {
-        method,
-        credentials: 'omit',
-        signal: AbortSignal.timeout(15000),
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
-        },
-        body: body ? JSON.stringify(body) : undefined,
-      }).catch(() => {
-        throw new RequestError(
-          '서버에 연결할 수 없습니다. 네트워크와 API 주소를 확인해 주세요.',
-          0,
-        );
-      });
-      if (response.status === 204) return undefined as T;
-      const contentType = response.headers.get('content-type') ?? '';
-      if (!contentType.includes('application/json')) {
-        throw new Error('학교 API에 연결되지 않았습니다. API 주소와 서버 설정을 확인해 주세요.');
-      }
-      const data = await response.json();
-      if (!response.ok) {
-        if (response.status === 401 && token && currentLogin.current?.token === token) {
+          error instanceof RequestError &&
+          error.status === 401 &&
+          token &&
+          currentLogin.current?.token === token
+        ) {
           loginVersion.current++;
           setLogin(null);
           setClasses([]);
@@ -161,9 +77,8 @@ export default function SchoolWorkspace({
           setMembers([]);
           setSelected(null);
         }
-        throw new RequestError(data.error?.message ?? '요청 처리에 실패했습니다.', response.status);
+        throw error;
       }
-      return data as T;
     },
     [apiBase],
   );
