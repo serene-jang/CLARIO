@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { connectDatabase, migrate } from './database.js';
+import { connectDatabase, migrate, databaseVersion } from './database.js';
 import { bootstrapSchool } from './bootstrap.js';
 
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
@@ -8,7 +8,7 @@ try {
   const [command, schoolName, domainValue, emailValue, adminName] = process.argv.slice(2);
   if (command === 'migrate') {
     await migrate(pool);
-    console.log('Database migrations through version 5 applied.');
+    console.log(`Database migrations through version ${databaseVersion} applied.`);
   } else if (command === 'school') {
     if (!schoolName || !domainValue || !emailValue || !adminName) {
       throw new Error(

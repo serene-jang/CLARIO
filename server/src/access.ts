@@ -1,77 +1,24 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import type { Pool, PoolClient } from 'pg';
 import type { CurrentUser, UserRole } from '@clario/shared';
 import type { VerifyGoogle } from './identity.js';
+import { verifyGoogleLogin } from './identity.js';
+import { ApiError, fail, digest, id, text, emailAddress, transaction } from './api-core.js';
+import { identityRouter } from './identity-access.js';
+import { studentRouter } from './student-access.js';
+import { stopClassroom } from './classroom-management.js';
+import { materialUrl } from './material-url.js';
+import { browserDeviceRouter, blockingSnapshot } from './site-blocking.js';
+export { digest, emailAddress } from './api-core.js';
 
 export interface AccessOptions {
+  documents?: import('./classroom-documents.js').DocumentStore;
+  syntheticMedia?: import('./synthetic-media.js').SyntheticMedia;
   pool: Pool;
   googleClientId: string;
   origins: string[];
   verifyGoogle: VerifyGoogle;
-}
-
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-function fail(status: number, code: string, message: string): never {
-  throw new ApiError(status, code, message);
-}
-export const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const id = (value: unknown) =>
-  typeof value === 'string' && uuidPattern.test(value)
-    ? value
-    : fail(400, 'INVALID_INPUT', '올바른 식별자가 필요합니다.');
-const text = (value: unknown, max: number) =>
-  typeof value === 'string' && value.trim().length > 0 && value.trim().length <= max
-    ? value.trim()
-    : fail(400, 'INVALID_INPUT', `1~${max}자의 값을 입력해 주세요.`);
-export const emailAddress = (value: unknown) => {
-  const email = text(value, 254).toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    fail(400, 'INVALID_INPUT', '올바른 이메일 주소를 입력해 주세요.');
-  }
-  return email;
-};
-
-function materialUrl(value: unknown) {
-  const raw = text(value, 2048);
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return fail(400, 'INVALID_URL', '올바른 HTTPS 자료 주소를 입력해 주세요.');
-  }
-  if (url.protocol !== 'https:' || url.username || url.password) {
-    fail(400, 'INVALID_URL', '인증 정보가 포함되지 않은 HTTPS 자료 주소가 필요합니다.');
-  }
-  if (url.href.length > 2048) {
-    fail(400, 'INVALID_URL', '자료 주소는 2048자 이내여야 합니다.');
-  }
-  return url.href;
-}
-
-async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await work(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 async function audit(
@@ -98,7 +45,7 @@ export function accessRouter(options: AccessOptions) {
   router.use((request, response, next) => {
     const origin = request.get('origin');
     const deviceExtension =
-      request.path.startsWith('/device/') &&
+      (request.path.startsWith('/device/') || request.path.startsWith('/browser-device/')) &&
       origin !== undefined &&
       /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
     if (origin && !options.origins.includes(origin) && !deviceExtension) {
@@ -137,6 +84,8 @@ export function accessRouter(options: AccessOptions) {
   };
   router.use('/auth', limitAuth);
   router.use('/device', limitAuth);
+  router.use('/browser-device', limitAuth, browserDeviceRouter(pool));
+  router.use('/student', limitAuth, studentRouter(options));
   const workspaceSignupBuckets = new Map<string, { count: number; expires: number }>();
   const limitWorkspaceSignup: RequestHandler = (request, _response, next) => {
     const now = Date.now();
@@ -181,7 +130,7 @@ export function accessRouter(options: AccessOptions) {
       }>(
         `SELECT d.id,d.school_id,d.student_id,d.name FROM registered_devices d
          JOIN classes c ON c.id=d.class_id JOIN users u ON u.id=d.student_id
-         WHERE d.id=$1 AND c.archived_at IS NULL AND u.active AND u.role='student'
+         WHERE d.id=$1 AND c.archived_at IS NULL AND c.closed_at IS NULL AND u.active AND u.role='student'
          FOR UPDATE OF d`,
         [pairing.rows[0].device_id],
       );
@@ -215,11 +164,12 @@ export function accessRouter(options: AccessOptions) {
       `SELECT d.id,d.class_id,d.school_id FROM registered_devices d
        JOIN classes c ON c.id=d.class_id JOIN users u ON u.id=d.student_id
        WHERE d.credential_hash=$1 AND d.credential_expires_at>now()
-       AND c.archived_at IS NULL AND u.active AND u.role='student'`,
+       AND c.archived_at IS NULL AND c.closed_at IS NULL AND u.active AND u.role='student'`,
       [digest(header.slice(7))],
     );
     if (!result.rows[0]) fail(401, 'DEVICE_REVOKED', '기기 인증이 만료되었거나 해제되었습니다.');
     response.locals.device = result.rows[0];
+    response.locals.deviceHash = digest(header.slice(7));
     next();
   });
   router.post('/device/sync', async (_request, response) => {
@@ -238,7 +188,19 @@ export function accessRouter(options: AccessOptions) {
       [device.class_id],
     );
     if (!focus.rows[0]) fail(401, 'DEVICE_UNAVAILABLE', '학급 연결을 확인하지 못했습니다.');
-    response.json({ materials: result.rows, focusMode: focus.rows[0].enabled });
+    const blocking = await transaction(pool, async (client) => {
+      await client.query('SELECT id FROM classes WHERE id=$1 FOR UPDATE', [device.class_id]);
+      const current = await client.query(
+        `SELECT d.id FROM registered_devices d JOIN users u ON u.id=d.student_id
+         WHERE d.id=$1 AND d.class_id=$2 AND d.credential_hash=$3
+         AND d.credential_expires_at>statement_timestamp() AND u.active AND u.role='student'`,
+        [device.id, device.class_id, response.locals.deviceHash],
+      );
+      if (!current.rowCount)
+        fail(401, 'DEVICE_REVOKED', '기기 인증이 만료되었거나 해제되었습니다.');
+      return blockingSnapshot(client, device.class_id);
+    });
+    response.json({ materials: result.rows, focusMode: focus.rows[0].enabled, blocking });
   });
   router.post('/device/materials/:materialId/ack', async (request, response) => {
     const materialId = id(request.params.materialId);
@@ -278,7 +240,7 @@ export function accessRouter(options: AccessOptions) {
   });
 
   router.get('/auth/config', (_request, response) => {
-    response.json({ googleClientId: options.googleClientId });
+    response.json({ googleClientId: options.googleClientId, emailPassword: true });
   });
   router.post('/auth/challenge', async (_request, response) => {
     const challengeId = randomUUID();
@@ -299,19 +261,7 @@ export function accessRouter(options: AccessOptions) {
     const credential = text(request.body?.credential, 16000);
     const workspaceName = text(request.body?.workspaceName, 100);
     const ownerName = text(request.body?.ownerName, 100);
-    const challenge = await pool.query<{ nonce_hash: string }>(
-      'DELETE FROM auth_challenges WHERE id=$1 AND expires_at > now() RETURNING nonce_hash',
-      [challengeId],
-    );
-    if (!challenge.rowCount) {
-      fail(401, 'LOGIN_EXPIRED', '가입 요청이 만료되었거나 이미 사용되었습니다.');
-    }
-    const identity = await options
-      .verifyGoogle(credential)
-      .catch(() => fail(401, 'INVALID_GOOGLE_TOKEN', 'Google 계정을 확인하지 못했습니다.'));
-    if (digest(identity.nonce) !== challenge.rows[0].nonce_hash) {
-      fail(401, 'INVALID_NONCE', '가입 요청이 일치하지 않습니다.');
-    }
+    const identity = await verifyGoogleLogin(pool, options.verifyGoogle, challengeId, credential);
     const email = emailAddress(identity.email);
     const token = randomBytes(32).toString('base64url');
     const user = await transaction(pool, async (client) => {
@@ -356,25 +306,14 @@ export function accessRouter(options: AccessOptions) {
   router.post('/auth/google', async (request, response) => {
     const challengeId = id(request.body?.challengeId);
     const credential = text(request.body?.credential, 16000);
-    const challenge = await pool.query<{ nonce_hash: string }>(
-      'DELETE FROM auth_challenges WHERE id=$1 AND expires_at > now() RETURNING nonce_hash',
-      [challengeId],
-    );
-    if (!challenge.rowCount) {
-      fail(401, 'LOGIN_EXPIRED', '로그인 요청이 만료되었거나 이미 사용되었습니다.');
-    }
-    const identity = await options
-      .verifyGoogle(credential)
-      .catch(() => fail(401, 'INVALID_GOOGLE_TOKEN', 'Google 계정을 확인하지 못했습니다.'));
-    if (digest(identity.nonce) !== challenge.rows[0].nonce_hash) {
-      fail(401, 'INVALID_NONCE', '로그인 요청이 일치하지 않습니다.');
-    }
+    const identity = await verifyGoogleLogin(pool, options.verifyGoogle, challengeId, credential);
     const token = randomBytes(32).toString('base64url');
     const result = await transaction(pool, async (client) => {
       const approved = await client.query<CurrentUser>(
         `UPDATE users u SET google_sub=$1
          FROM schools s
          WHERE u.school_id=s.id AND u.email=$2 AND u.active
+           AND u.role IN ('teacher','student','school_admin')
            AND (u.google_sub IS NULL OR u.google_sub=$1)
          RETURNING u.id,u.school_id AS "schoolId",u.email,u.name,u.role`,
         [identity.sub, identity.email],
@@ -397,19 +336,31 @@ export function accessRouter(options: AccessOptions) {
     response.json({ token, ...result });
   });
 
+  router.use('/identity', limitAuth, identityRouter(options));
+
   const authenticate: RequestHandler = async (request, response, next) => {
     const header = request.get('authorization');
     if (!header || !/^Bearer [A-Za-z0-9_-]{43}$/.test(header)) {
       fail(401, 'UNAUTHENTICATED', '로그인이 필요합니다.');
     }
-    const session = await pool.query<CurrentUser>(
+    const session = await pool.query<
+      Omit<CurrentUser, 'schoolId' | 'role'> & {
+        schoolId: string | null;
+        role: UserRole | 'member';
+      }
+    >(
       `SELECT u.id,u.school_id AS "schoolId",u.email,u.name,u.role
        FROM auth_sessions a JOIN users u ON u.id=a.user_id
        WHERE a.token_hash=$1 AND a.expires_at > now() AND u.active`,
       [digest(header.slice(7))],
     );
     if (!session.rows[0]) fail(401, 'SESSION_EXPIRED', '로그인이 만료되었습니다.');
-    response.locals.user = session.rows[0];
+    const user = session.rows[0];
+    response.locals.identityUser = { id: user.id, email: user.email, name: user.name };
+    if (!user.schoolId || user.role === 'member') {
+      fail(403, 'LEGACY_WORKSPACE_REQUIRED', '기존 작업공간 계정에만 허용된 기능입니다.');
+    }
+    response.locals.user = { ...user, schoolId: user.schoolId, role: user.role };
     response.locals.tokenHash = digest(header.slice(7));
     next();
   };
@@ -506,7 +457,7 @@ export function accessRouter(options: AccessOptions) {
     const user = actor(response);
     const result = await pool.query(
       `SELECT c.id,c.school_id AS "schoolId",c.name,c.teacher_id AS "teacherId"
-       FROM classes c WHERE c.school_id=$1 AND c.archived_at IS NULL
+       FROM classes c WHERE c.school_id=$1 AND c.archived_at IS NULL AND c.closed_at IS NULL
        AND ($3='school_admin' OR ($3='teacher' AND c.teacher_id=$2)
          OR ($3='student' AND EXISTS (
            SELECT 1 FROM class_members m WHERE m.class_id=c.id AND m.student_id=$2)))
@@ -536,7 +487,7 @@ export function accessRouter(options: AccessOptions) {
     requireRole(user, 'teacher', 'school_admin');
     const classId = id(request.params.classId);
     const result = await pool.query(
-      `SELECT id FROM classes WHERE id=$1 AND school_id=$2 AND archived_at IS NULL
+      `SELECT id FROM classes WHERE id=$1 AND school_id=$2 AND archived_at IS NULL AND closed_at IS NULL
        AND ($4='school_admin' OR teacher_id=$3)`,
       [classId, user.schoolId, user.id, user.role],
     );
@@ -558,7 +509,8 @@ export function accessRouter(options: AccessOptions) {
     const user = actor(response);
     const classId: string = response.locals.classId;
     await transaction(pool, async (client) => {
-      await client.query('UPDATE classes SET archived_at=now() WHERE id=$1', [classId]);
+      await client.query('SELECT id FROM classes WHERE id=$1 FOR UPDATE', [classId]);
+      await stopClassroom(client, classId, user.id, true);
       const removed = await client.query<{ id: string }>(
         'DELETE FROM registered_devices WHERE class_id=$1 RETURNING id',
         [classId],
@@ -635,7 +587,7 @@ export function accessRouter(options: AccessOptions) {
   router.get('/classes/:classId/materials', async (_request, response) => {
     const materials = await pool.query(
       `SELECT id,title,url,created_at AS "createdAt",expires_at AS "expiresAt"
-       FROM class_materials WHERE class_id=$1 AND expires_at>now()
+       FROM class_materials WHERE class_id=$1 AND expires_at>now() AND audience='all'
        ORDER BY created_at DESC LIMIT 100`,
       [response.locals.classId],
     );
@@ -653,34 +605,28 @@ export function accessRouter(options: AccessOptions) {
           .map(({ material_id: _id, ...delivery }) => delivery),
       })),
     });
-    router.get('/classes/:classId/focus', async (_request, response) => {
-      const result = await pool.query(
-        'SELECT voluntary_focus AS enabled FROM classes WHERE id=$1',
-        [response.locals.classId],
-      );
-      response.json(result.rows[0]);
-    });
-    router.patch('/classes/:classId/focus', async (request, response) => {
-      const user = actor(response);
-      const enabled: unknown = request.body?.enabled;
-      if (typeof enabled !== 'boolean')
-        fail(400, 'INVALID_INPUT', '집중 안내 상태가 올바르지 않습니다.');
-      await transaction(pool, async (client) => {
-        const changed = await client.query(
-          `UPDATE classes SET voluntary_focus=$1 WHERE id=$2 AND school_id=$3 AND archived_at IS NULL
+  });
+  router.get('/classes/:classId/focus', async (_request, response) => {
+    const result = await pool.query('SELECT voluntary_focus AS enabled FROM classes WHERE id=$1', [
+      response.locals.classId,
+    ]);
+    response.json(result.rows[0]);
+  });
+  router.patch('/classes/:classId/focus', async (request, response) => {
+    const user = actor(response);
+    const enabled: unknown = request.body?.enabled;
+    if (typeof enabled !== 'boolean')
+      fail(400, 'INVALID_INPUT', '집중 안내 상태가 올바르지 않습니다.');
+    await transaction(pool, async (client) => {
+      const changed = await client.query(
+        `UPDATE classes SET voluntary_focus=$1 WHERE id=$2 AND school_id=$3 AND archived_at IS NULL AND closed_at IS NULL
            AND ($5='school_admin' OR teacher_id=$4) RETURNING id`,
-          [enabled, response.locals.classId, user.schoolId, user.id, user.role],
-        );
-        if (!changed.rowCount) fail(404, 'NOT_FOUND', '접근 가능한 학급이 없습니다.');
-        await audit(
-          client,
-          user,
-          enabled ? 'focus.started' : 'focus.ended',
-          response.locals.classId,
-        );
-      });
-      response.sendStatus(204);
+        [enabled, response.locals.classId, user.schoolId, user.id, user.role],
+      );
+      if (!changed.rowCount) fail(404, 'NOT_FOUND', '접근 가능한 학급이 없습니다.');
+      await audit(client, user, enabled ? 'focus.started' : 'focus.ended', response.locals.classId);
     });
+    response.sendStatus(204);
   });
   router.post('/classes/:classId/materials', async (request, response) => {
     const user = actor(response);
@@ -689,7 +635,7 @@ export function accessRouter(options: AccessOptions) {
     const materialId = randomUUID();
     await transaction(pool, async (client) => {
       const classroom = await client.query(
-        `SELECT id FROM classes WHERE id=$1 AND school_id=$2 AND archived_at IS NULL
+        `SELECT id FROM classes WHERE id=$1 AND school_id=$2 AND archived_at IS NULL AND closed_at IS NULL
          AND ($4='school_admin' OR teacher_id=$3) FOR SHARE`,
         [response.locals.classId, user.schoolId, user.id, user.role],
       );
@@ -730,7 +676,7 @@ export function accessRouter(options: AccessOptions) {
     const deviceId = randomUUID();
     await transaction(pool, async (client) => {
       const classroom = await client.query(
-        `SELECT id FROM classes WHERE id=$1 AND school_id=$2 AND archived_at IS NULL
+        `SELECT id FROM classes WHERE id=$1 AND school_id=$2 AND archived_at IS NULL AND closed_at IS NULL
          AND ($4='school_admin' OR teacher_id=$3) FOR SHARE`,
         [classId, user.schoolId, user.id, user.role],
       );
@@ -816,15 +762,16 @@ export function accessRouter(options: AccessOptions) {
 
 export const apiErrors: ErrorRequestHandler = async (error: unknown, _request, response, _next) => {
   if (error instanceof ApiError) {
-    if ([401, 403, 404].includes(error.status)) {
+    if ([401, 403, 404, 409, 429].includes(error.status)) {
       console.warn('access_denied', { code: error.code });
       const user: CurrentUser | undefined = response.locals.user;
+      const identityUser: { id: string } | undefined = response.locals.identityUser;
       const pool: Pool | undefined = response.locals.pool;
       try {
         await pool?.query(
           `INSERT INTO audit_logs(school_id,actor_id,action,result)
            VALUES ($1,$2,'access.denied',$3)`,
-          [user?.schoolId ?? null, user?.id ?? null, error.code],
+          [user?.schoolId ?? null, user?.id ?? identityUser?.id ?? null, error.code],
         );
       } catch {
         console.error('access_denied_audit_failed');

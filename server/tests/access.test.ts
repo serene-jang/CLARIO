@@ -8,7 +8,7 @@ import { Pool } from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
-import { migrate } from '../src/database.js';
+import { migrate, databaseVersion } from '../src/database.js';
 import { digest } from '../src/access.js';
 import type { GoogleIdentity } from '../src/identity.js';
 import { bootstrapSchool } from '../src/bootstrap.js';
@@ -738,7 +738,7 @@ describe('student device inventory', () => {
     await migrate(pool);
     expect(
       (await pool.query('SELECT version FROM schema_migrations ORDER BY version')).rows,
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
+    ).toEqual(Array.from({ length: databaseVersion }, (_, index) => ({ version: index + 1 })));
   });
   it('releases asset numbers and audits inventory removal when a classroom is archived', async () => {
     await request(app)
@@ -906,6 +906,38 @@ describe('device pairing, presence and classroom material delivery', () => {
       { deviceId: device, receivedAt: null, openedAt: null },
     ]);
   });
+  it('keeps paired devices separate from guest students and does not trust claimed capture support', async () => {
+    await pair();
+    await request(app)
+      .post('/api/device/sync')
+      .set(deviceHeaders())
+      .send({
+        screenViewingSupport: 'supported',
+        recordingSupport: 'supported',
+      })
+      .expect(200);
+    const list = await request(app).get(`${classPath()}/devices`).set(auth('teacher')).expect(200);
+    expect(list.body.devices[0]).toMatchObject({
+      id: device,
+      connectionState: 'connected',
+      screenViewingSupport: 'unverified',
+      recordingSupport: 'unverified',
+    });
+    await request(app)
+      .get('/api/identity/classrooms')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .expect(401);
+    await request(app)
+      .get('/api/student/focus')
+      .set('Host', new URL(origin).host)
+      .set('Origin', origin)
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .expect(401);
+    expect(
+      (await pool.query('SELECT id FROM classroom_participants WHERE class_id=$1', [classroom]))
+        .rowCount,
+    ).toBe(0);
+  });
   it('authorizes voluntary focus settings and delivers notices without device control', async () => {
     await request(app)
       .patch(`${classPath()}/focus`)
@@ -937,6 +969,38 @@ describe('device pairing, presence and classroom material delivery', () => {
           .focusMode,
       ).toBe(enabled);
     }
+  });
+  it('serves focus before any materials request and tracks legacy writes without duplicate versions', async () => {
+    const fresh = createApp({
+      pool,
+      origins: [origin],
+      googleClientId: 'test-client',
+      verifyGoogle: async () => {
+        throw new Error('Not used');
+      },
+    });
+    await request(fresh).get(`${classPath()}/focus`).set(auth('teacher')).expect(200);
+    const read = async () =>
+      (
+        await pool.query('SELECT focus_version,focus_updated_at FROM classes WHERE id=$1', [
+          classroom,
+        ])
+      ).rows[0];
+    const before = await read();
+    for (let i = 0; i < 2; i++) {
+      await request(fresh)
+        .patch(`${classPath()}/focus`)
+        .set(auth('teacher'))
+        .send({ enabled: true })
+        .expect(204);
+      expect((await read()).focus_version).toBe(before.focus_version + 1);
+    }
+    await request(fresh)
+      .patch(`${classPath()}/focus`)
+      .set(auth('teacher'))
+      .send({ enabled: false })
+      .expect(204);
+    expect((await read()).focus_version).toBe(before.focus_version + 2);
   });
   it('redelivers pending materials, records acknowledgments idempotently, and isolates recipients', async () => {
     const result = await request(app)

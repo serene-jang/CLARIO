@@ -19,6 +19,13 @@ async function request(message) {
       ? `${result.device.name} · ${fresh ? '연결됨' : '연결 확인 불가'} · ${result.origin}`
       : '기기 연결 미등록';
     if (result.status?.error) errorBox.textContent = result.status.error;
+    const blocking = result.blocking;
+    document.querySelector('#blocking').textContent =
+      blocking && Date.parse(blocking.expiresAt) > Date.now()
+        ? blocking.domains.length
+          ? `이 브라우저에 적용 중: ${blocking.domains.join(', ')} · 확인 만료 ${new Date(blocking.expiresAt).toLocaleTimeString()}`
+          : '이 브라우저에 적용 중인 사이트 차단 없음'
+        : '현재 적용을 확인할 수 없음 · 차단 규칙 해제';
     document.querySelector('#focus').textContent =
       !fresh || result.focusMode === null
         ? '현재 집중 안내 상태를 확인할 수 없습니다.'
@@ -39,8 +46,13 @@ async function request(message) {
       materials.append(item);
     }
     if (!result.materials.length) materials.textContent = '현재 확인할 수 있는 자료가 없습니다.';
-    form.reset();
+    if (message.type === 'pair' || message.type === 'pairStudent') form.reset();
   } catch (error) {
+    status.textContent = '연결 확인 불가';
+    document.querySelector('#blocking').textContent =
+      '차단 규칙 상태를 확인할 수 없습니다. 해제 실패가 계속되면 확장을 비활성화하세요.';
+    document.querySelector('#focus').textContent = '현재 집중 안내 상태를 확인할 수 없습니다.';
+    materials.replaceChildren();
     errorBox.textContent = error instanceof Error ? error.message : '연결 처리 실패';
   } finally {
     busy = false;
@@ -69,7 +81,11 @@ form.addEventListener('submit', (event) => {
     .request({ origins: [`${url.origin}/*`] })
     .then((granted) => {
       if (!granted) throw new Error('학교 API 연결 권한을 허용해야 합니다.');
-      return request({ type: 'pair', origin, code: String(data.get('code')).trim() });
+      return request({
+        type: data.get('studentCode') ? 'pairStudent' : 'pair',
+        origin,
+        code: String(data.get('code')).trim(),
+      });
     })
     .catch((error) => {
       errorBox.textContent = error.message;
@@ -82,3 +98,4 @@ document.querySelector('#disconnect').addEventListener('click', () => {
   }
 });
 void request({ type: 'status' });
+setInterval(() => void request({ type: 'status' }), 5000);

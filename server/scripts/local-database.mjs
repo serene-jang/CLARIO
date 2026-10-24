@@ -5,8 +5,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export async function startLocalDatabase() {
-  const directory = resolve('.local-postgres');
+export async function startLocalDatabase(directory = resolve('.local-postgres')) {
   await mkdir(directory, { recursive: true });
   const configPath = resolve(directory, 'connection.json');
   const config = existsSync(configPath)
@@ -46,7 +45,7 @@ export async function startLocalDatabase() {
     throw error;
   }
   console.log(
-    'Local PostgreSQL ready at 127.0.0.1:55432. Connection: server/.local-postgres/connection.env',
+    `Local PostgreSQL ready at 127.0.0.1:${config.port}. Private connection file: ${resolve(directory, 'connection.env')}`,
   );
   return database;
 }

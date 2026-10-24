@@ -1,4 +1,9 @@
 import { Pool } from 'pg';
+import { migrateClassroomIdentity } from './classroom-schema.js';
+import { migrateGuestParticipation } from './guest-schema.js';
+import { randomBytes } from 'node:crypto';
+
+export const databaseVersion = 14;
 
 export function connectDatabase(connectionString: string) {
   let url: URL;
@@ -25,7 +30,10 @@ export function connectDatabase(connectionString: string) {
   return pool;
 }
 
-export async function migrate(pool: Pool) {
+export async function migrate(pool: Pool, targetVersion = databaseVersion) {
+  if (!Number.isInteger(targetVersion) || targetVersion < 1 || targetVersion > databaseVersion) {
+    throw new Error('Unsupported database migration target.');
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -36,7 +44,7 @@ export async function migrate(pool: Pool) {
       );
     `);
     const applied = await client.query('SELECT 1 FROM schema_migrations WHERE version = 1');
-    if (!applied.rowCount) {
+    if (!applied.rowCount && targetVersion >= 1) {
       await client.query(`
         CREATE TABLE schools (
           id uuid PRIMARY KEY, name text NOT NULL,
@@ -84,7 +92,7 @@ export async function migrate(pool: Pool) {
       `);
     }
     const devicesApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version = 2');
-    if (!devicesApplied.rowCount) {
+    if (!devicesApplied.rowCount && targetVersion >= 2) {
       await client.query(`
         CREATE TABLE registered_devices (
           id uuid PRIMARY KEY,
@@ -108,7 +116,7 @@ export async function migrate(pool: Pool) {
     const connectionApplied = await client.query(
       'SELECT 1 FROM schema_migrations WHERE version = 3',
     );
-    if (!connectionApplied.rowCount) {
+    if (!connectionApplied.rowCount && targetVersion >= 3) {
       await client.query(`
         ALTER TABLE registered_devices ADD COLUMN credential_hash text,
           ADD COLUMN credential_expires_at timestamptz, ADD COLUMN last_seen_at timestamptz;
@@ -137,7 +145,7 @@ export async function migrate(pool: Pool) {
       `);
     }
     const focusApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version = 4');
-    if (!focusApplied.rowCount) {
+    if (!focusApplied.rowCount && targetVersion >= 4) {
       await client.query(`
         ALTER TABLE classes ADD COLUMN voluntary_focus boolean NOT NULL DEFAULT false;
         INSERT INTO schema_migrations(version) VALUES (4);
@@ -146,10 +154,149 @@ export async function migrate(pool: Pool) {
     const workspaceDomainsApplied = await client.query(
       'SELECT 1 FROM schema_migrations WHERE version = 5',
     );
-    if (!workspaceDomainsApplied.rowCount) {
+    if (!workspaceDomainsApplied.rowCount && targetVersion >= 5) {
       await client.query(`
         ALTER TABLE schools DROP CONSTRAINT IF EXISTS schools_google_domain_key;
         INSERT INTO schema_migrations(version) VALUES (5);
+      `);
+    }
+    const identityApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version = 6');
+    if (!identityApplied.rowCount && targetVersion >= 6) {
+      await migrateClassroomIdentity(client);
+    }
+    const guestsApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version = 7');
+    if (!guestsApplied.rowCount && targetVersion >= 7) {
+      await migrateGuestParticipation(client);
+    }
+    const joinApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version=8');
+    if (!joinApplied.rowCount && targetVersion >= 8) {
+      await client.query(`
+        CREATE TABLE student_join_rate_secret (
+          singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+          secret text NOT NULL CHECK(length(secret)=64)
+        );
+        CREATE TABLE student_join_rate_events (
+          key_hash text NOT NULL CHECK(key_hash ~ '^[0-9a-f]{64}$'),
+          attempted_at timestamptz NOT NULL DEFAULT statement_timestamp()
+        );
+        CREATE INDEX student_join_rate_key ON student_join_rate_events(key_hash,attempted_at);
+        CREATE INDEX student_join_rate_expiry ON student_join_rate_events(attempted_at);
+        INSERT INTO schema_migrations(version) VALUES(8);
+      `);
+      await client.query('INSERT INTO student_join_rate_secret(secret) VALUES($1)', [
+        randomBytes(32).toString('hex'),
+      ]);
+    }
+    const materialsApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version=9');
+    if (!materialsApplied.rowCount && targetVersion >= 9) {
+      await client.query(`
+        ALTER TABLE class_materials ADD CONSTRAINT class_material_scope UNIQUE(id,class_id);
+        CREATE TABLE classroom_material_receipts (
+          material_id uuid NOT NULL,
+          class_id uuid NOT NULL,
+          participant_id uuid NOT NULL,
+          received_at timestamptz,
+          opened_at timestamptz,
+          PRIMARY KEY(material_id,participant_id),
+          FOREIGN KEY(material_id,class_id) REFERENCES class_materials(id,class_id) ON DELETE CASCADE,
+          FOREIGN KEY(participant_id,class_id) REFERENCES classroom_participants(id,class_id)
+        );
+        CREATE INDEX classroom_material_receipts_participant
+          ON classroom_material_receipts(participant_id,material_id);
+        INSERT INTO schema_migrations(version) VALUES(9);
+      `);
+    }
+    const focusVersionApplied = await client.query(
+      'SELECT 1 FROM schema_migrations WHERE version=10',
+    );
+    if (!focusVersionApplied.rowCount && targetVersion >= 10) {
+      await client.query(`
+        ALTER TABLE classes ADD COLUMN focus_version integer NOT NULL DEFAULT 0 CHECK(focus_version>=0),
+          ADD COLUMN focus_updated_at timestamptz NOT NULL DEFAULT statement_timestamp();
+        CREATE FUNCTION track_classroom_focus() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.voluntary_focus IS DISTINCT FROM OLD.voluntary_focus THEN
+            NEW.focus_version=OLD.focus_version+1;
+            NEW.focus_updated_at=statement_timestamp();
+          ELSE
+            NEW.focus_version=OLD.focus_version;
+            NEW.focus_updated_at=OLD.focus_updated_at;
+          END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER classroom_focus_version BEFORE UPDATE ON classes
+          FOR EACH ROW EXECUTE FUNCTION track_classroom_focus();
+        INSERT INTO schema_migrations(version) VALUES(10);
+      `);
+    }
+    const privacyApplied = await client.query('SELECT 1 FROM schema_migrations WHERE version=11');
+    if (!privacyApplied.rowCount && targetVersion >= 11) {
+      await client.query(`
+        CREATE TABLE participant_erasure_requests (
+          id uuid PRIMARY KEY,
+          class_id uuid NOT NULL REFERENCES classes(id),
+          participant_id uuid NOT NULL UNIQUE,
+          requested_by uuid NOT NULL REFERENCES users(id),
+          requested_at timestamptz NOT NULL DEFAULT statement_timestamp(),
+          status text NOT NULL DEFAULT 'awaiting_policy' CHECK(status='awaiting_policy'),
+          FOREIGN KEY(participant_id,class_id) REFERENCES classroom_participants(id,class_id)
+        );
+        INSERT INTO schema_migrations(version) VALUES(11);
+      `);
+    }
+    const classroomTools = await client.query('SELECT 1 FROM schema_migrations WHERE version=12');
+    if (!classroomTools.rowCount && targetVersion >= 12) {
+      await client.query(`
+        ALTER TABLE classroom_participation_audit ADD COLUMN target_id uuid;
+        CREATE TABLE classroom_documents (
+          id uuid PRIMARY KEY, class_id uuid NOT NULL REFERENCES classes(id),
+          title text NOT NULL, bytes integer NOT NULL CHECK(bytes>0 AND bytes<=10485760),
+          status text NOT NULL CHECK(status IN ('uploading','available','failed','deleting')),
+          created_by uuid NOT NULL REFERENCES users(id),
+          created_at timestamptz NOT NULL DEFAULT statement_timestamp()
+        );
+        CREATE INDEX classroom_documents_class ON classroom_documents(class_id,created_at);
+        ALTER TABLE classes ADD COLUMN blocked_domains text[] NOT NULL DEFAULT '{}';
+        CREATE TABLE classroom_browser_connections(
+          id uuid PRIMARY KEY,class_id uuid NOT NULL REFERENCES classes(id),
+          participant_id uuid NOT NULL, generation integer NOT NULL,
+          student_credential text NOT NULL REFERENCES student_participation_sessions(token_hash),
+          code_hash text UNIQUE,code_expires_at timestamptz NOT NULL,
+          token_hash text UNIQUE,revoked_at timestamptz,last_seen_at timestamptz,
+          FOREIGN KEY(participant_id,class_id) REFERENCES classroom_participants(id,class_id)
+        );
+        CREATE INDEX classroom_browser_participant ON classroom_browser_connections(participant_id);
+        INSERT INTO schema_migrations(version) VALUES(12);
+      `);
+    }
+    const emailAuth = await client.query('SELECT 1 FROM schema_migrations WHERE version=13');
+    if (!emailAuth.rowCount && targetVersion >= 13) {
+      await client.query(`
+        ALTER TABLE users ADD COLUMN password_hash text;
+        CREATE TABLE identity_auth_budgets (
+          key_hash text PRIMARY KEY,
+          attempts integer NOT NULL CHECK(attempts>0),
+          expires_at timestamptz NOT NULL
+        );
+        CREATE INDEX identity_auth_budgets_expiry ON identity_auth_budgets(expires_at);
+        INSERT INTO schema_migrations(version) VALUES(13);
+      `);
+    }
+    const targets = await client.query('SELECT 1 FROM schema_migrations WHERE version=14');
+    if (!targets.rowCount && targetVersion >= 14) {
+      await client.query(`
+        ALTER TABLE class_materials ADD COLUMN audience text NOT NULL DEFAULT 'all'
+          CHECK(audience IN ('all','selected'));
+        ALTER TABLE class_materials ADD CONSTRAINT class_materials_scope UNIQUE(id,class_id);
+        CREATE TABLE classroom_material_recipients (
+          material_id uuid NOT NULL, class_id uuid NOT NULL, participant_id uuid NOT NULL,
+          PRIMARY KEY(material_id,participant_id),
+          FOREIGN KEY(material_id,class_id) REFERENCES class_materials(id,class_id) ON DELETE CASCADE,
+          FOREIGN KEY(participant_id,class_id) REFERENCES classroom_participants(id,class_id)
+        );
+        CREATE INDEX classroom_material_recipients_student
+          ON classroom_material_recipients(participant_id,material_id);
+        INSERT INTO schema_migrations(version) VALUES(14);
       `);
     }
     await client.query('COMMIT');

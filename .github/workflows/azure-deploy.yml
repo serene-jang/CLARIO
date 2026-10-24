@@ -33,6 +33,7 @@ jobs:
       - run: npm test
       - run: node --test scripts/verify-deployment.test.mjs
       - run: npm run build
+      - run: node --test scripts/verify-runtime.test.mjs
       - name: Package Linux API runtime
         run: |
           npm prune --omit=dev --ignore-scripts
@@ -42,11 +43,13 @@ jobs:
           cp packages/shared/package.json runtime/packages/shared/
           cp apps/teacher/package.json runtime/apps/teacher/
           cp apps/student/package.json runtime/apps/student/
+          cp -r apps/teacher/dist runtime/apps/teacher/
+          cp -r apps/student/dist runtime/apps/student/
           cp -r server/dist runtime/server/
           cp -r packages/shared/dist runtime/packages/shared/
           cp -r node_modules runtime/
           cd runtime
-          node --input-type=module -e "await import('@clario/shared'); await import('./server/dist/app.js')"
+          node --input-type=module -e "await import('@clario/shared'); const {createApp}=await import('./server/dist/app.js'); createApp(undefined,{web:{teacher:'apps/teacher/dist',student:'apps/student/dist'}})"
           zip -qr ../api.zip .
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -69,7 +72,8 @@ jobs:
 
   deploy:
     name: Deploy free Azure trial
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.CLARIO_TRIAL_DEPLOY_ENABLED == 'true'
+    environment: trial
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 30

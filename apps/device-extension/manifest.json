@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "CLARIO School Device",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minimum_chrome_version": "120",
-  "description": "학교 승인 후 기기 상태와 수업 링크를 연결합니다. 화면이나 방문 기록을 수집하지 않습니다.",
-  "permissions": ["storage", "alarms"],
+  "description": "승인된 수업 연결·자료 안내와 지정 도메인의 브라우저 내 차단을 지원합니다. 화면이나 방문 기록을 수집하지 않습니다.",
+  "permissions": ["storage", "alarms", "declarativeNetRequest"],
   "optional_host_permissions": ["https://*/*", "http://127.0.0.1/*", "http://localhost/*"],
   "background": { "service_worker": "worker.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "CLARIO 연결·자료 상태" }
