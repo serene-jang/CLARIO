@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import DashboardRecordingPanel from './DashboardRecordingPanel.js';
 
@@ -59,9 +59,11 @@ it('requires an explicit teacher action, shows active status and stops to save',
   fireEvent.click(screen.getByRole('button', { name: '대시보드 녹화 시작' }));
   await screen.findByText('녹화 중 · 과학 · 이 탭의 화면만 기록됩니다.');
   expect(start).toHaveBeenCalledWith('class-1', '과학', expect.any(AbortSignal));
-  const closeEvent = new Event('beforeunload', { cancelable: true });
-  window.dispatchEvent(closeEvent);
-  expect(closeEvent.defaultPrevented).toBe(true);
+  await waitFor(() => {
+    const closeEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(closeEvent);
+    expect(closeEvent.defaultPrevented).toBe(true);
+  });
 
   fireEvent.click(screen.getByRole('button', { name: '녹화 중지 및 저장' }));
   await screen.findByRole('status');
