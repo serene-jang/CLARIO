@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import DashboardRecordingPanel from './DashboardRecordingPanel.js';
 
@@ -56,14 +56,25 @@ it('requires an explicit teacher action, shows active status and stops to save',
   );
 
   expect(screen.getByText(/학생 기기 화면을 캡처하거나 전송하지 않습니다/)).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: '대시보드 녹화 시작' }));
+  const beforeRecording = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(beforeRecording);
+  expect(beforeRecording.defaultPrevented).toBe(false);
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: '대시보드 녹화 시작' }));
+  });
   await screen.findByText('녹화 중 · 과학 · 이 탭의 화면만 기록됩니다.');
   expect(start).toHaveBeenCalledWith('class-1', '과학', expect.any(AbortSignal));
   const closeEvent = new Event('beforeunload', { cancelable: true });
   window.dispatchEvent(closeEvent);
   expect(closeEvent.defaultPrevented).toBe(true);
 
-  fireEvent.click(screen.getByRole('button', { name: '녹화 중지 및 저장' }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: '녹화 중지 및 저장' }));
+  });
   await screen.findByRole('status');
   expect(await screen.findByText(/녹화 저장 완료/)).toBeTruthy();
+  const afterRecording = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(afterRecording);
+  expect(afterRecording.defaultPrevented).toBe(false);
 });
